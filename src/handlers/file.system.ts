@@ -3,7 +3,6 @@ import path from 'path';
 
 const OUTPUT_DIR = './results';
 
-
 export async function readFileData(fileName: string): Promise<any> {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(OUTPUT_DIR)) {

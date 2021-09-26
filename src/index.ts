@@ -1,6 +1,7 @@
 import cliProgress from 'cli-progress';
 import got from 'got';
 import { clusterApiUrl, Connection, PublicKey } from '@solana/web3.js';
+import parallelLimit from 'async/parallelLimit';
 
 import { Data, Metadata } from './metaplex/classes';
 import { METADATA_PROGRAM_ID } from './metaplex/constants';
@@ -15,6 +16,10 @@ interface MintData {
   tokenMetadata: Metadata;
   totalSupply: number;
 }
+interface CollectionInfo {
+  mintWalletAddress: string;
+  totalSupply: number;
+}
 
 //interface to hold the rety data
 interface RetryMint {
@@ -26,28 +31,20 @@ const retries: RetryMint[] = [];
 const mintTokenIds = [];
 const mints: MintData[] = [];
 
-//Sample Decoded MetaDAta
-// Metadata {
-//   key: 4,
-//   updateAuthority: 'CeS4fWuRz44kUf5aHJZW62LD8GJkPabLsChA5Zn2rLiS',
-//   mint: 'GVBNcknDgx6uXE3YzpTMFGXhPJeGn6wEKH3GMU2DJSZf',
-//   data: Data {
-//     name: 'Galactic Gecko #8788',
-//     symbol: 'GGSG',
-//     uri: 'https://arweave.net/_y92_wJiqWGztTqJbBvNC80ZHGEXbrP6eNcyB9DTw2U',
-//     sellerFeeBasisPoints: 500,
-//     creators: [ [Creator], [Creator], [Creator], [Creator], [Creator] ]
-//   },
-//   primarySaleHappened: 1,
-//   isMutable: 1,
-//   editionNonce: undefined
-// }
+const progressBar = new cliProgress.SingleBar(
+  {},
+  cliProgress.Presets.shades_classic
+);
+// batch all accountData to loop over with aysnc
+const metaDataFetcher = [];
+
 // get metadat given Token Account
 async function retrieveMetadata(
   accountData: any,
   decoded: boolean,
   record: any
 ) {
+  //TODO RETRY mechanism on failed needs fixed
   try {
     // if already decoded URI, use seperate function to retry data logic
     let tokenMetadata: any;
@@ -57,7 +54,6 @@ async function retrieveMetadata(
       tokenMetadata = { data: { uri: accountData } };
     }
 
-    console.log(' ---->> ', tokenMetadata);
     //check for valid url before passing to got, add to retires array if invalid URL
     if (tokenMetadata.data.uri.indexOf('https://') === -1) {
       console.log(
@@ -76,8 +72,8 @@ async function retrieveMetadata(
     } else {
       console.log('fetching data for ', tokenMetadata.data.name);
       const nftInfoResponse = await got(tokenMetadata.data.uri);
-      console.log('nftInfoResponse.body ', nftInfoResponse.body);
-      // appendToFile(`parsed-error:${'geckos'}`, nftInfoResponse);
+      // console.log('nftInfoResponse.body ', nftInfoResponse.body);
+
       return {
         nftData: JSON.parse(nftInfoResponse.body),
         tokenMetadata,
@@ -91,6 +87,7 @@ async function retrieveMetadata(
     };
   }
 }
+
 async function tryToShowOverallMetadataInfo(accountData) {
   const { nftData } = await retrieveMetadata(accountData, false, null);
   console.log(`Name: ${nftData.name || ''}`);
@@ -101,16 +98,66 @@ async function tryToShowOverallMetadataInfo(accountData) {
 
 // begin scan
 (async function () {
-  //error on invalid wallet address TODO, tighten up to check for valid address
+  dataScrape();
+})();
+
+// function to fetch data, progress bar, save to file and log retries
+async function fetchData(
+  accountData: Buffer,
+  collectionInfo: CollectionInfo,
+  callback: () => {}
+): Promise<void> {
+  try {
+    // fetch metadata for token
+    const { nftData, tokenMetadata, status } = await retrieveMetadata(
+      accountData,
+      false,
+      null
+    );
+    // if data is fetched, parseto mintData and add to array
+    //TODO This needs reworked, currently doesn't process retries
+    if (status.success) {
+      const mintData = {
+        imageUri: nftData?.image,
+        mintWalletAddress: collectionInfo.mintWalletAddress,
+        nftData,
+        tokenMetadata,
+        totalSupply: collectionInfo.totalSupply,
+      };
+
+      mintTokenIds.push(tokenMetadata.mint);
+      mints.push(mintData);
+      appendToFile(
+        `mint-data:${collectionInfo.mintWalletAddress}`,
+        tokenMetadata.mint
+      );
+      appendToFile(
+        `mint-token-ids:${collectionInfo.mintWalletAddress}`,
+        mintData
+      );
+
+      // callback to tell async process next item
+      callback();
+    }
+
+    progressBar.increment();
+  } catch (error) {
+    console.log('errrr ', error);
+  }
+}
+
+export async function dataScrape() {
   if (process.argv.length < 3) {
     console.error('please provide a wallet address as an argument');
     return;
   }
 
+  //TODO verify valid SOL address
   const mintWalletAddress = process.argv.slice(2).shift();
 
-  const conn = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
-  console.log("--->> connection established")
+  const NETWORK = 'mainnet-beta';
+  const conn = new Connection(clusterApiUrl(NETWORK), 'confirmed');
+  console.log(`--->> ${NETWORK} connection established`);
   // get program accounts, this is what we can batch for parallelizaiton
   const response = await conn.getProgramAccounts(METADATA_PROGRAM_PK, {
     filters: [
@@ -122,33 +169,29 @@ async function tryToShowOverallMetadataInfo(accountData) {
       },
     ],
   });
-
-  // response format
-  // {
-  //   account: {
-  //     data: <Buffer 04 ad 07 62 98 f1 de 84 e4 37 89 25 54 81 89 b1 59 6f 82 5e fd 76 4a 98 63 54 87 60 46 31 db b5 e7 e6 dd 1e ab ea 4b d4 24 9b d4 61 94 a7 b0 a4 2c ab ... 629 more bytes>,
-  //     executable: false,
-  //     lamports: 5616720,
-  //     owner: [PublicKey],
-  //     rentEpoch: 227
-  //   },
-  //   pubkey: PublicKey {
-  //     _bn: <BN: 990a0b85e908bb6f9cd1b955163e21532ac7ee1bb79a54c76a54d18297e5e4ea>
-  //   }
-  // },
-  console.log('----->> data retrieved ' );
   const totalSupply = response.length;
+
+  const recordData = Object.values(response);
+  const collectionInfo = {
+    mintWalletAddress,
+    totalSupply,
+  };
+  for (let x = 0; x < recordData.length; x++) {
+    metaDataFetcher.push(function (callback) {
+      return fetchData(recordData[x].account.data, collectionInfo, callback);
+    });
+  }
+  console.log(
+    '----->> data retrieved ',
+    metaDataFetcher.length,
+    ' records to fetch '
+  );
   console.log('Mint Wallet Address: ', mintWalletAddress);
   console.log('Total Supply: ', totalSupply);
 
   // quickly show metadata from first record
   const firstRecord = response[0];
   await tryToShowOverallMetadataInfo(firstRecord.account.data);
-
-  const progressBar = new cliProgress.SingleBar(
-    {},
-    cliProgress.Presets.shades_classic
-  );
 
   progressBar.start(totalSupply, 0);
 
@@ -157,63 +200,17 @@ async function tryToShowOverallMetadataInfo(accountData) {
     return;
   }
 
-  for (const record of response) {
-    // console.log(record.account.data);
-    const { nftData, tokenMetadata, status } = await retrieveMetadata(
-      record.account.data,
-      false,
-      record
-    );
-    // if data is fetched, parseto mintData and add to array
-    if (status.success) {
-      const mintData = {
-        imageUri: nftData?.image,
-        mintWalletAddress,
-        nftData,
-        tokenMetadata,
-        totalSupply,
-      };
-
-      mintTokenIds.push(tokenMetadata.mint);
-      mints.push(mintData);
-      appendToFile(`mint-data:${mintWalletAddress}`, tokenMetadata.mint);
-      appendToFile(`mint-token-ids:${mintWalletAddress}`, mintData);
-    }
-
-    progressBar.increment();
+  // set thread count based off cpus, 2 is baseline laptop
+  // beefier machine could go higher without data loss
+  const THREAD_COUNT = 2;
+  console.log(
+    ` | ${THREAD_COUNT} threads processing | ${metaDataFetcher.length} requests`
+  );
+  try {
+    parallelLimit(metaDataFetcher, THREAD_COUNT, (err: any, results: any) => {
+      console.log('Data fetch complete');
+    });
+  } catch (error) {
+    console.log(error);
   }
-
-  if (retries.length > 0) {
-    console.log('re-fetching failed txs');
-    for (const retry of retries) {
-      const { nftData, tokenMetadata, status } = await retrieveMetadata(
-        retry.mintAddress,
-        true,
-        null
-      );
-      // if data is fetched, parseto mintData and add to array
-      if (status.success) {
-        const mintData = {
-          imageUri: nftData?.image,
-          mintWalletAddress,
-          nftData,
-          tokenMetadata,
-          totalSupply,
-        };
-
-        mintTokenIds.push(tokenMetadata.uri);
-        mints.push(mintData);
-        appendToFile(`mint-data:${mintWalletAddress}`, tokenMetadata.mint);
-        appendToFile(`mint-token-ids:${mintWalletAddress}`, mintData);
-      }
-    }
-  } else {
-    progressBar.stop();
-    console.log(
-      '\n',
-      `COMPLETE ------------`,
-      '\n',
-      ` ${mintTokenIds.length} saved || ${retries.length} errors`
-    );
-  }
-})();
+}
