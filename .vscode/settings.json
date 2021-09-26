@@ -1,0 +1,12 @@
+{
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  "workbench.colorCustomizations": {
+    "editorLineNumber.foreground": "#fff",
+    "titleBar.activeBackground": "#e66bcb",
+    "titleBar.activeForeground": "#fff"
+  }
+}
