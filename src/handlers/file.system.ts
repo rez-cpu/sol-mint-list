@@ -1,19 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { writeFile, readFile, writeFileSync } from 'fs';
+
 const OUTPUT_DIR = './results';
 
-// fs.writeFileSync(
-//   path.join(OUTPUT_DIR, `mint-token-ids:${mintWalletAddress}.json`),
-//   JSON.stringify(mintTokenIds),
-//   'utf-8'
-// );
-
-// fs.writeFileSync(
-//   path.join(OUTPUT_DIR, `mint-data:${mintWalletAddress}.json`),
-//   JSON.stringify(mints),
-//   'utf-8'
-// );
 
 export async function readFileData(fileName: string): Promise<any> {
   return new Promise((resolve, reject) => {
