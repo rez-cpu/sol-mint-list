@@ -40,10 +40,17 @@ export async function writeDataToFile(
 }
 
 export async function appendToFile(fileName: string, tx: any) {
-  // read file contents
-  const fileContents = await readFileData(fileName);
-  // add data to file
-  fileContents.push(tx);
-  // write data if enabled
-  await writeDataToFile(fileContents, tx, fileName);
+  return new Promise(async (resolve, reject) => {
+    try {
+      // read file contents
+      const fileContents = await readFileData(fileName);
+      // add data to file
+      fileContents.push(tx);
+      // write data if enabled
+      await writeDataToFile(fileContents, tx, fileName);
+      resolve('success');
+    } catch (error) {
+      reject('error');
+    }
+  });
 }

@@ -3,6 +3,7 @@ import got from 'got';
 import { clusterApiUrl, Connection, PublicKey } from '@solana/web3.js';
 import parallelLimit from 'async/parallelLimit';
 
+import async from 'async';
 import { Data, Metadata } from './metaplex/classes';
 import { METADATA_PROGRAM_ID } from './metaplex/constants';
 import { decodeMetadata } from './metaplex/metadata';
@@ -42,7 +43,9 @@ const metaDataFetcher = [];
 async function retrieveMetadata(
   accountData: any,
   decoded: boolean,
-  record: any
+  record: any,
+  writeToFile: boolean,
+  MINT_LIST: boolean
 ) {
   //TODO RETRY mechanism on failed needs fixed
   try {
@@ -53,32 +56,44 @@ async function retrieveMetadata(
     } else {
       tokenMetadata = { data: { uri: accountData } };
     }
-
-    //check for valid url before passing to got, add to retires array if invalid URL
-    if (tokenMetadata.data.uri.indexOf('https://') === -1) {
-      console.log(
-        ' invalid image URI, skipping adding to retries ->>> ' +
-          tokenMetadata.data.name
-      );
-      const retryData = {
-        name: tokenMetadata.data.name,
-        uri: tokenMetadata.data.uri.toString(),
-        mintAddress: tokenMetadata.mint,
-      };
-      retries.push(retryData);
+    // flag to just get the token mintList
+    if (MINT_LIST) {
+      // console.log(' MINT ', tokenMetadata.mint);
+      // token mint is in decoded tokenMetaData.mint
       return {
-        status: { success: false },
-      };
-    } else {
-      console.log('fetching data for ', tokenMetadata.data.name);
-      const nftInfoResponse = await got(tokenMetadata.data.uri);
-      // console.log('nftInfoResponse.body ', nftInfoResponse.body);
-
-      return {
-        nftData: JSON.parse(nftInfoResponse.body),
+        nftData: null,
         tokenMetadata,
         status: { success: true },
+        writeToFile: writeToFile,
       };
+    } else {
+      //check for valid url before passing to got, add to retires array if invalid URL
+      if (tokenMetadata.data.uri.indexOf('https://') === -1) {
+        console.log(
+          ' invalid image URI, skipping adding to retries ->>> ' +
+            tokenMetadata.data.name
+        );
+        const retryData = {
+          name: tokenMetadata.data.name,
+          uri: tokenMetadata.data.uri.toString(),
+          mintAddress: tokenMetadata.mint,
+        };
+        retries.push(retryData);
+        return {
+          status: { success: false },
+        };
+      } else {
+        console.log(' fetching ', tokenMetadata.data.name);
+        const nftInfoResponse = await got(tokenMetadata.data.uri);
+
+        // this fails, need to check for valid JSON
+        return {
+          nftData: JSON.parse(nftInfoResponse.body),
+          tokenMetadata,
+          status: { success: true },
+          writeToFile: writeToFile,
+        };
+      }
     }
   } catch (error) {
     console.log(record, error);
@@ -89,7 +104,14 @@ async function retrieveMetadata(
 }
 
 async function tryToShowOverallMetadataInfo(accountData) {
-  const { nftData } = await retrieveMetadata(accountData, false, null);
+  // when displaying data dont write duplicate first fetch to file
+  const { nftData } = await retrieveMetadata(
+    accountData,
+    false,
+    null,
+    false,
+    false
+  );
   console.log(`Name: ${nftData.name || ''}`);
   console.log(`Symbol: ${nftData.symbol || ''}`);
   console.log(`Collection.Name: ${nftData.collection?.name || ''}`);
@@ -98,21 +120,28 @@ async function tryToShowOverallMetadataInfo(accountData) {
 
 // begin scan
 (async function () {
-  dataScrape();
+  console.log('mint list = ', process.env.MINT_LIST);
+  // add flag to skip getting full meta data and only decode mintList
+  const MINT_LIST = Boolean(process.env.MINT_LIST);
+  console.log(MINT_LIST);
+  dataScrape(MINT_LIST);
 })();
 
 // function to fetch data, progress bar, save to file and log retries
 async function fetchData(
   accountData: Buffer,
   collectionInfo: CollectionInfo,
-  callback: () => {}
+  callback: () => {},
+  MINT_LIST: boolean
 ): Promise<void> {
   try {
     // fetch metadata for token
     const { nftData, tokenMetadata, status } = await retrieveMetadata(
       accountData,
       false,
-      null
+      null,
+      true,
+      MINT_LIST
     );
     // if data is fetched, parseto mintData and add to array
     //TODO This needs reworked, currently doesn't process retries
@@ -124,17 +153,24 @@ async function fetchData(
         tokenMetadata,
         totalSupply: collectionInfo.totalSupply,
       };
-
+      const writeToConsole = true;
+      if (writeToConsole) {
+        console.log(' writing ', tokenMetadata.mint);
+        console.log(' writing ', mintData);
+      }
       mintTokenIds.push(tokenMetadata.mint);
       mints.push(mintData);
-      appendToFile(
+      await appendToFile(
         `mint-data:${collectionInfo.mintWalletAddress}`,
         tokenMetadata.mint
       );
-      appendToFile(
-        `mint-token-ids:${collectionInfo.mintWalletAddress}`,
-        mintData
-      );
+      // flag to only get mintList and not full metaData
+      if (!MINT_LIST) {
+        appendToFile(
+          `mint-token-ids:${collectionInfo.mintWalletAddress}`,
+          mintData
+        );
+      }
 
       // callback to tell async process next item
       callback();
@@ -146,7 +182,7 @@ async function fetchData(
   }
 }
 
-export async function dataScrape() {
+export async function dataScrape(MINT_LIST: boolean) {
   if (process.argv.length < 3) {
     console.error('please provide a wallet address as an argument');
     return;
@@ -177,9 +213,23 @@ export async function dataScrape() {
     totalSupply,
   };
   for (let x = 0; x < recordData.length; x++) {
-    metaDataFetcher.push(function (callback) {
-      return fetchData(recordData[x].account.data, collectionInfo, callback);
-    });
+    if (MINT_LIST) {
+      await fetchData(
+        recordData[x].account.data,
+        collectionInfo,
+        () => null,
+        MINT_LIST
+      );
+    } else {
+      metaDataFetcher.push(function (callback: () => {}) {
+        return fetchData(
+          recordData[x].account.data,
+          collectionInfo,
+          callback,
+          MINT_LIST
+        );
+      });
+    }
   }
   console.log(
     '----->> data retrieved ',
@@ -202,14 +252,18 @@ export async function dataScrape() {
 
   // set thread count based off cpus, 2 is baseline laptop
   // beefier machine could go higher without data loss
-  const THREAD_COUNT = 2;
+  const THREAD_COUNT = 1;
   console.log(
     ` | ${THREAD_COUNT} threads processing | ${metaDataFetcher.length} requests`
   );
   try {
-    parallelLimit(metaDataFetcher, THREAD_COUNT, (err: any, results: any) => {
-      console.log('Data fetch complete');
-    });
+    parallelLimit(
+      async.reflectAll(metaDataFetcher),
+      THREAD_COUNT,
+      (err: any, results: any) => {
+        console.log('Data fetch complete');
+      }
+    );
   } catch (error) {
     console.log(error);
   }
