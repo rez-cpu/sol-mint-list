@@ -1,3 +1,4 @@
+require('dotenv').config();
 import cliProgress from 'cli-progress';
 import got from 'got';
 import { clusterApiUrl, Connection, PublicKey } from '@solana/web3.js';
@@ -38,7 +39,7 @@ const progressBar = new cliProgress.SingleBar(
 );
 // batch all accountData to loop over with aysnc
 const metaDataFetcher = [];
-
+let collectionName: string = '';
 // get metadat given Token Account
 async function retrieveMetadata(
   accountData: any,
@@ -112,9 +113,10 @@ async function tryToShowOverallMetadataInfo(accountData) {
     false,
     false
   );
+  collectionName = nftData.collection?.name || '';
   console.log(`Name: ${nftData.name || ''}`);
   console.log(`Symbol: ${nftData.symbol || ''}`);
-  console.log(`Collection.Name: ${nftData.collection?.name || ''}`);
+  console.log(`Collection.Name: ${collectionName}`);
   console.log(`Collection.Family: ${nftData.collection?.family || ''}`);
 }
 
@@ -123,7 +125,7 @@ async function tryToShowOverallMetadataInfo(accountData) {
   console.log('mint list = ', process.env.MINT_LIST);
   // add flag to skip getting full meta data and only decode mintList
   const MINT_LIST = Boolean(process.env.MINT_LIST);
-  console.log(MINT_LIST);
+
   dataScrape(MINT_LIST);
 })();
 
@@ -158,10 +160,14 @@ async function fetchData(
         console.log(' writing ', tokenMetadata.mint);
         console.log(' writing ', mintData);
       }
-      mintTokenIds.push(tokenMetadata.mint);
+      // const name =
+      //   collectionName.toUpperCase().split(' ').join('_') +
+      //   '_' +
+      //   tokenMetadata.mint;
+      mintTokenIds.push(name);
       mints.push(mintData);
       await appendToFile(
-        `mint-data:${collectionInfo.mintWalletAddress}`,
+        `mint-list:${collectionInfo.mintWalletAddress}`,
         tokenMetadata.mint
       );
       // flag to only get mintList and not full metaData
@@ -206,6 +212,14 @@ export async function dataScrape(MINT_LIST: boolean) {
     ],
   });
   const totalSupply = response.length;
+  console.log('Mint Wallet Address: ', mintWalletAddress);
+  console.log('Total Supply: ', totalSupply);
+
+  // quickly show metadata from first record
+  const firstRecord = response[0];
+  await tryToShowOverallMetadataInfo(firstRecord.account.data);
+
+  progressBar.start(totalSupply, 0);
 
   const recordData = Object.values(response);
   const collectionInfo = {
@@ -236,14 +250,6 @@ export async function dataScrape(MINT_LIST: boolean) {
     metaDataFetcher.length,
     ' records to fetch '
   );
-  console.log('Mint Wallet Address: ', mintWalletAddress);
-  console.log('Total Supply: ', totalSupply);
-
-  // quickly show metadata from first record
-  const firstRecord = response[0];
-  await tryToShowOverallMetadataInfo(firstRecord.account.data);
-
-  progressBar.start(totalSupply, 0);
 
   if (!totalSupply) {
     progressBar.stop();
